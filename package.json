@@ -1,0 +1,16 @@
+{
+    "name": "gameboard2d-server",
+    "version": "0.1.0",
+    "description": "",
+    "main": "app.js",
+    "scripts": {
+        "test": "echo \"Error: no test specified\" && exit 1"
+    },
+    "author": "Johannes Franzen",
+    "license": "ISC",
+    "dependencies": {
+        "nodemon": "^2.0.3",
+        "shortid": "^2.2.15",
+        "socket.io": "^2.3.0"
+    }
+}
