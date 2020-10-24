@@ -1,29 +1,37 @@
 const BaseLobby = require('./BaseLobby');
 const GameLobbySettings = require('./GameLobbySettings');
 const Connection = require('../Connection');
-let Bullet = require('../Bullet');
+const LobbyState = require('../utilities/lobbyState');
 
+/*
+ * A general model for Lobbies that manage Games, containing functionality to manage
+ * the lobby before start of the game (max connections, ready checks, synchronous game start,...).
+ * For related general features you can extend this class directly.
+ * Game functionality should be implemented in a subclass extending this.
+ */
 module.exports = class GameLobby extends BaseLobby {
 
-    constructor(id, name = Text, settings = GameLobbySettings) {
+
+    constructor(id, ownerID = Text, name = Text, settings = GameLobbySettings) {
 
         super(id);
+        this.ownerID = ownerID;
         this.name = name;
         this.settings = settings;
-        this.bullets = [];
+        this.lobbyState.currentState = "Lobby";
 
     }
 
     onUpdate() {
-        this.updateBullets();
-        this.updatePlayerRespawns();
+        super.onUpdate();
     }
 
+    //#region general lobby functionality
     canEnterLobby(connection = Connection) {
 
         let currentPlayerCount = this.connections.length;
 
-        if (currentPlayerCount + 1 > this.settings.maxPlayers) {
+        if (currentPlayerCount + 1 > this.settings.maxPlayers || this.lobbyState.currentState != 'Lobby') {
             return false;
         }
         return true;
@@ -31,6 +39,7 @@ module.exports = class GameLobby extends BaseLobby {
 
     onEnterLobby(connection = Connection) {
         super.onEnterLobby(connection);
+        connection.socket.emit('joinSuccess');
         this.addPlayer(connection);
 
         //If server needs to spawn extra objects for new player, define that here (loot, enemies,...)
@@ -42,14 +51,20 @@ module.exports = class GameLobby extends BaseLobby {
         this.removePlayer(connection);
 
         //If server needs to unspawn extra objects that were created for the leaving player, define that here (loot, enemies,...)
+
+        //Refresh the UI for the remaining players (if they are in lobby selection)
+        if (this.connections.length > 0) {
+            this.ownerID = this.connections[0].player.id;
+            this.connections[0].server.onGetPlayersInLobby(this.connections[0]);
+        } else {
+            connection.server.closeLobbyIfEmpty(this);
+        }
     }
 
     addPlayer(connection = Connection) {
 
-        let returnData = {
-                id: connection.player.id
-            }
-            //tell all players (clients) in the lobby that a new player spawned
+        //tell all players (clients) in the lobby that a new player spawned
+        let returnData = { id: connection.player.id };
         connection.socket.emit('spawn', returnData);
         connection.socket.broadcast.to(this.id).emit('spawn', returnData);
 
@@ -66,146 +81,17 @@ module.exports = class GameLobby extends BaseLobby {
         connection.socket.broadcast.to(this.id).emit('disconnected', { id: connection.player.id });
     }
 
-    onFireBullet(connection = Connection, data) {
-        let bullet = new Bullet();
-        bullet.name = 'Bullet';
-        bullet.owner = data.owner;
-        bullet.position.x = data.position.x;
-        bullet.position.y = data.position.y;
-        bullet.direction.x = data.direction.x;
-        bullet.direction.y = data.direction.y;
+    tryToStartGame(connection = Connection) {
 
-        this.bullets.push(bullet);
-
-        let returnData = {
-            name: bullet.name,
-            owner: bullet.owner,
-            id: bullet.id,
-            position: {
-                x: bullet.position.x,
-                y: bullet.position.y
-            },
-            direction: {
-                x: bullet.direction.x,
-                y: bullet.direction.y
-            },
-            speed: bullet.speed
-        }
-
-        connection.socket.emit('serverSpawn', returnData);
-        connection.socket.broadcast.to(this.id).emit('serverSpawn', returnData);
-    }
-
-    onCollisionDestroy(connection = Connection, data) {
-
-        let returnBullets = this.bullets.filter(bullet => {
-            return bullet.id == data.id;
-        });
-
-
-        //loop through each returned bullet (most likely only one)
-        returnBullets.forEach(bullet => {
-            let playerHit = false;
-
-            //Check if someone other than the bullet owner was hit
-            this.connections.forEach(c => {
-                let player = c.player;
-                if (bullet.owner == player.id) {
+            for (let i = 0; i < this.connections.length; i++) {
+                if (!this.connections[i].player.isReady) {
+                    //Send error if needed
                     return;
                 }
-
-                let distance = bullet.position.distance(player.position);
-
-                if (distance < 0.95) {
-                    //Deal damage to hit player
-                    let isDead = player.receiveDamage(50);
-                    if (isDead) {
-                        console.log('[' + new Date(Date.now()) + '] Player with id: ' + player.id + ' died.');
-
-                        let returnData = {
-                            id: player.id
-                        }
-                        c.socket.emit('playerDied', returnData);
-                        c.socket.broadcast.to(this.id).emit('playerDied', returnData);
-                    } else {
-                        console.log('[' + new Date(Date.now()) + '] Player with id: ' + player.id + ' was hit and has ' + player.health + ' left.');
-                    }
-                    //Destroy bullet immediatly
-                    this.despawnBullet(bullet);
-                }
-
-            });
-            //Bullet didn't hit a player so flag it for removal in normal server loop
-            bullet.isDestroyed = true;
-        });
-    }
-
-    despawnBullet(bullet = Bullet) {
-
-        let index = this.bullets.indexOf(bullet);
-
-        if (index > -1) {
-            this.bullets.splice(index, 1);
-            let returnData = {
-                id: bullet.id
             }
-            this.connections.forEach(connection => {
-                connection.socket.emit('serverUnspawn', returnData);
-            });
-        }
-    }
-
-    //#region onUpdate functions
-    updateBullets() {
-
-        this.bullets.forEach(bullet => {
-            let isDestroyed = bullet.onUpdate(); //onUpdate() returns if bullet was destroyed in last update cycle
-
-            if (isDestroyed) {
-                //Despawn bullet if destroyed and handle next bullet
-                this.despawnBullet(bullet);
-                return;
-            }
-            //otherwise send a package with the updated position to each player (position calculation happened in onUpdate() call above)
-            /*let returnData = {
-                id: bullet.id,
-                position: {
-                    x: bullet.position.x,
-                    y: bullet.position.y
-                }
-            }
-            this.connections.forEach(connection => {
-                connection.socket.emit('updatePosition', returnData);
-            });*/
-        });
-
-    }
-
-    updatePlayerRespawns() {
-
-            this.connections.forEach(connection => {
-                let player = connection.player;
-
-                //jump to next player if player isn't dead
-                if (!player.isDead) {
-                    return;
-                }
-                //call the respawnCounter() of player which counts and returns if the player may respawn yet. Jump to next player if not
-                let mayRespawn = player.respawnCounter();
-                if (!mayRespawn) {
-                    return;
-                }
-                let returnData = {
-                    id: player.id,
-                    position: {
-                        x: player.position.x,
-                        y: player.position.y
-                    }
-                }
-                connection.socket.emit('playerRespawn', returnData);
-                connection.socket.broadcast.to(this.id).emit('playerRespawn', returnData);
-
-            });
+            this.lobbyState.currentState = this.lobbyState.GAME;
+            connection.socket.emit('startGame');
+            connection.socket.broadcast.to(this.id).emit('startGame');
         }
         //#endregion
 }

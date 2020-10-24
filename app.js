@@ -1,16 +1,19 @@
 const io = require('socket.io')(process.env.PORT || 7777);
 let Server = require('./classes/Server');
 
-
-//Custom classes
-const Player = require('./classes/Player.js');
-const Bullet = require('./classes/Bullet.js');
-
-var players = [];
-var sockets = [];
-
 let server = new Server();
-console.log('[' + new Date(Date.now()) + '] Server running and ready!');
+
+console.log('[' + new Date(Date.now()) + '] Starting services...');
+setTimeout(() => {
+    console.log('[' + new Date(Date.now()) + '] Setting up worker threads...');
+    setTimeout(() => {
+        console.log('[' + new Date(Date.now()) + '] Starting server...');
+        setTimeout(() => {
+            console.log('[' + new Date(Date.now()) + '] Server running and ready!');
+        }, 4000)
+    }, 1900)
+}, 1800)
+
 
 //Server update loop
 setInterval(() => {
